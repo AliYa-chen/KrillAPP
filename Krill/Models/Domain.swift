@@ -1,9 +1,9 @@
 import Foundation
 
 enum UsagePeriod: String, CaseIterable, Identifiable, Sendable {
-    case today, week, month
+    case day, week, month
     var id: String { rawValue }
-    var label: String { switch self { case .today: "今日"; case .week: "近 7 天"; case .month: "近 30 天" } }
+    var label: String { switch self { case .day: "24 小时"; case .week: "7 天"; case .month: "30 天" } }
 }
 
 struct UsageFilter: Equatable, Sendable {
@@ -12,6 +12,7 @@ struct UsageFilter: Equatable, Sendable {
     var tokenID: Int? = nil
     var chargeType: String = ""
     var method: String = ""
+    var status: Int? = nil
 }
 
 struct UsageStats: Sendable {
@@ -24,6 +25,9 @@ struct UsageStats: Sendable {
     var totalTokens: Double = 0
     var cost: Double = 0
     var cacheHitRate: Double = 0
+    var successfulRequests: Int = 0
+    var failedRequests: Int = 0
+    var statusCountsAvailable: Bool = false
 }
 
 struct HourCell: Identifiable, Sendable {
@@ -42,6 +46,7 @@ struct TrendPoint: Identifiable, Sendable {
     var id: Date { date }
     var cost: Double
     var requests: Int
+    var totalTokens: Double = 0
 }
 struct ModelUsage: Identifiable, Sendable {
     var id: String { name }
@@ -63,6 +68,7 @@ struct QuotaSummary: Sendable {
     var carryover: Double = 0
     var credit: Double = 0
     var plan: Double = 0
+    var totalDeducted: Double { plan + credit }
 }
 struct RequestLog: Identifiable, Sendable {
     var id: String
@@ -78,6 +84,20 @@ struct RequestLog: Identifiable, Sendable {
     var status: String
     var method: String
     var tokenName: String
+    var channel: String = ""
+    var endpoint: String = ""
+    var firstTokenMS: Double? = nil
+    var planCost: Double? = nil
+    var creditCost: Double? = nil
+    var reasoningEffort: String = ""
+    var errorMessage: String = ""
+    var chargeSource: String = ""
+    var durationAvailable: Bool = true
+    var statusLabel: String {
+        if isSuccess { return "请求成功" }
+        if status == "102" { return "连接中" }
+        return "请求异常"
+    }
     var isSuccess: Bool { (Int(status).map { (200..<300).contains($0) }) ?? false }
 }
 struct TokenOption: Identifiable, Sendable { var id: Int; var name: String }
@@ -127,8 +147,7 @@ enum KrillDate {
         return nil
     }
     static func range(for period: UsagePeriod, now: Date) -> (start: Date, end: Date) {
-        let start = calendar.startOfDay(for: now)
-        let days = switch period { case .today: 0; case .week: -6; case .month: -29 }
-        return (calendar.date(byAdding: .day, value: days, to: start)!, now)
+        let days = switch period { case .day: 1; case .week: 7; case .month: 30 }
+        return (now.addingTimeInterval(-Double(days) * 86_400), now)
     }
 }

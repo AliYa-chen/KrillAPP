@@ -34,14 +34,9 @@ struct KrillBackground: View {
 struct KrillMark: View {
     var size: CGFloat = 40
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            Image("KrillLogo")
-                .resizable()
-                .frame(width: size * 192 / 72, height: size * 82 / 72)
-                .offset(x: -size * 5 / 72, y: -size * 5 / 72)
-        }
-        .frame(width: size * 64 / 72, height: size, alignment: .topLeading)
-        .clipped()
+        Image(systemName: "chart.xyaxis.line")
+        .font(.system(size: size * 0.6, weight: .medium))
+        .foregroundStyle(KrillTheme.accent)
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }

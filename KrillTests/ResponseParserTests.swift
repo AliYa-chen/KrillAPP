@@ -123,4 +123,62 @@ final class ResponseParserTests: XCTestCase {
         XCTAssertEqual(body["method"]?.int, 3)
         XCTAssertEqual(body["charge_type"]?.string, "plan")
     }
+
+    func testSuccessAndFailureCountsAndTokenTrend() throws {
+        let payload = try json("""
+        {"total_requests":12,"success_requests":10,"failed_requests":2,"total_cost_usd":"2.5",
+         "trend":[{"bucket_start":"2026-10-27T08:00:00Z","request_count":12,"total_tokens":12000,"total_cost_usd":"2.5"}]}
+        """)
+        let stats = try ResponseParser.stats(payload)
+        XCTAssertEqual(stats.successfulRequests, 10)
+        XCTAssertEqual(stats.failedRequests, 2)
+        XCTAssertTrue(stats.statusCountsAvailable)
+        XCTAssertEqual(ResponseParser.trend(payload).first?.totalTokens, 12000)
+    }
+
+    func testStatusFilterPreservesZeroFailureSelector() throws {
+        var filter = UsageFilter()
+        filter.status = 0
+        let body = AppStore.query(filter: filter, start: Date(), end: Date())
+        XCTAssertEqual(body["status"]?.int, 0)
+        filter.status = 1
+        XCTAssertEqual(AppStore.query(filter: filter, start: Date(), end: Date())["status"]?.int, 1)
+    }
+
+    func testRequestDetailMappingAndMissingOptionalValues() throws {
+        let payload = try json("""
+        {"total":1,"items":[{"request_time":"2026-10-27T09:05:40Z","model":"",
+         "status":400,"method":3,"cost_usd":"0.02","channel_name":"Test channel",
+         "host":"https://example.test:8443/v1/responses","first_token_time_ms":null,
+         "plan_cost_usd":"0.015","credit_cost_usd":"0.005","reasoning_effort":5,
+         "charge_source_summary":"Test plan + balance","error_message":"Invalid parameter"}]}
+        """)
+        let row = try XCTUnwrap(ResponseParser.logs(payload, page: 1).first)
+        XCTAssertEqual(row.model, "未标注模型")
+        XCTAssertEqual(row.channel, "Test channel")
+        XCTAssertEqual(row.endpoint, "example.test:8443")
+        XCTAssertNil(row.firstTokenMS)
+        XCTAssertFalse(row.durationAvailable)
+        XCTAssertEqual(row.planCost, 0.015)
+        XCTAssertEqual(row.creditCost, 0.005)
+        XCTAssertEqual(row.reasoningEffort, "XHigh")
+        XCTAssertEqual(row.errorMessage, "Invalid parameter")
+    }
+
+    func testDeductionTotalUsesPlanAndCreditRatherThanQuotaSourceBreakdown() {
+        let summary = QuotaSummary(sameDay: 2, carryover: 3, credit: 1, plan: 7)
+        XCTAssertEqual(summary.totalDeducted, 8)
+    }
+
+    func testDemoStatsStayConsistentAfterRollingRangeAndStatusFilter() throws {
+        let now = try XCTUnwrap(KrillDate.parse("2026-10-27T17:30:00"))
+        var filter = UsageFilter()
+        filter.period = .day
+        filter.status = 0
+        let snapshot = DemoData.snapshot(filter: filter, now: now)
+        XCTAssertEqual(snapshot.stats.requests, snapshot.stats.failedRequests)
+        XCTAssertEqual(snapshot.stats.successfulRequests, 0)
+        XCTAssertEqual(snapshot.trend.reduce(0) { $0 + $1.totalTokens }, snapshot.stats.totalTokens)
+        XCTAssertEqual(snapshot.quotaSummary.totalDeducted, snapshot.stats.cost, accuracy: 0.000001)
+    }
 }

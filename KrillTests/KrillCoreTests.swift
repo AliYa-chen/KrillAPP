@@ -20,17 +20,25 @@ final class KrillCoreTests: XCTestCase {
         XCTAssertNil(KrillDate.parse("invalid timestamp"))
     }
 
-    func testSevenDayRangeIncludesTodayAndSixPreviousCalendarDays() throws {
+    func testSevenDayRangeUsesRolling168Hours() throws {
         let now = try XCTUnwrap(KrillDate.parse("2026-10-27T17:30:00"))
         let range = KrillDate.range(for: .week, now: now)
-        XCTAssertEqual(KrillDate.filterString(range.start), "2026-10-21T00:00:00")
+        XCTAssertEqual(KrillDate.filterString(range.start), "2026-10-20T17:30:00")
+        XCTAssertEqual(range.end.timeIntervalSince(range.start), 7 * 86_400)
         XCTAssertEqual(range.end, now)
     }
 
     func testThirtyDayRangeCrossesMonthBoundary() throws {
         let now = try XCTUnwrap(KrillDate.parse("2026-10-27T17:30:00"))
         let range = KrillDate.range(for: .month, now: now)
-        XCTAssertEqual(KrillDate.filterString(range.start), "2026-09-28T00:00:00")
+        XCTAssertEqual(KrillDate.filterString(range.start), "2026-09-27T17:30:00")
+    }
+
+    func test24HoursStaysDistinctFromCalendarToday() throws {
+        let now = try XCTUnwrap(KrillDate.parse("2026-10-27T17:30:00"))
+        let range = KrillDate.range(for: .day, now: now)
+        XCTAssertEqual(KrillDate.filterString(range.start), "2026-10-26T17:30:00")
+        XCTAssertNotEqual(range.start, KrillDate.calendar.startOfDay(for: now))
     }
 
     func testRequestHTTPStatusClassification() {

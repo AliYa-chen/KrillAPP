@@ -32,6 +32,14 @@ struct DashboardFilterSheet: View {
                         Text("订阅额度").tag("plan")
                         Text("账户余额").tag("balance")
                     }
+                    Picker("请求状态", selection: $draft.status) {
+                        Text("全部状态").tag(Int?.none)
+                        Text("成功").tag(Optional(1))
+                        Text("异常").tag(Optional(0))
+                        Text("参数错误").tag(Optional(400))
+                        Text("审核拦截").tag(Optional(451))
+                        Text("连接中").tag(Optional(102))
+                    }
                     Picker("协议", selection: $draft.method) {
                         Text("所有协议").tag("")
                         Text("Anthropic Messages").tag("1")
@@ -83,7 +91,7 @@ struct DashboardLogDetail: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 12) {
-                        Label(log.isSuccess ? "请求成功" : "请求异常", systemImage: log.isSuccess ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        Label(log.statusLabel, systemImage: log.isSuccess ? "checkmark.circle.fill" : log.status == "102" ? "clock" : "exclamationmark.circle.fill")
                             .font(.caption).foregroundStyle(log.isSuccess ? KrillTheme.green : KrillTheme.amber)
                         Text(log.model).font(.title2.weight(.bold)).textSelection(.enabled)
                         Text(KrillFormat.money(log.cost, precision: 6))
@@ -91,18 +99,45 @@ struct DashboardLogDetail: View {
                         Text(KrillFormat.date(log.date, pattern: "yyyy年M月d日 HH:mm:ss") + " · UTC+8")
                             .font(.caption).foregroundStyle(KrillTheme.muted)
                     }.frame(maxWidth: .infinity, alignment: .leading).krillCard()
-                    VStack(spacing: 18) {
-                        detail("输入 Tokens", value: KrillFormat.number(log.inputTokens))
-                        detail("输出 Tokens", value: KrillFormat.number(log.outputTokens))
-                        detail("缓存读取", value: KrillFormat.number(log.cacheReadTokens))
-                        detail("缓存写入", value: KrillFormat.number(log.cacheWriteTokens))
-                        detail("思考 Tokens", value: KrillFormat.number(log.reasoningTokens))
+                    VStack(alignment: .leading, spacing: 18) {
+                        SectionEyebrow(title: "Token 用量")
+                        detail("输入 Tokens", value: tokenCount(log.inputTokens))
+                        detail("输出 Tokens", value: tokenCount(log.outputTokens))
+                        detail("缓存读取", value: tokenCount(log.cacheReadTokens))
+                        detail("缓存写入", value: tokenCount(log.cacheWriteTokens))
+                        detail("思考 Tokens", value: tokenCount(log.reasoningTokens))
                     }.krillCard()
-                    VStack(spacing: 18) {
-                        detail("耗时", value: (log.durationMS / 1000).formatted(.number.precision(.fractionLength(2))) + " s")
+                    VStack(alignment: .leading, spacing: 18) {
+                        SectionEyebrow(title: "请求信息")
                         detail("状态", value: log.status)
+                        detail("渠道", value: available(log.channel))
+                        detail("接入点", value: available(log.endpoint))
                         detail("协议", value: protocolName(log.method))
-                        detail("API Key", value: log.tokenName.isEmpty ? "—" : log.tokenName)
+                        detail("推理强度", value: available(log.reasoningEffort))
+                        detail("首 Token 耗时", value: log.firstTokenMS.map(duration) ?? "—")
+                        detail("总耗时", value: log.durationAvailable ? duration(log.durationMS) : "—")
+                        detail("API Key", value: available(log.tokenName))
+                    }.krillCard()
+                    VStack(alignment: .leading, spacing: 18) {
+                        SectionEyebrow(title: "扣费明细")
+                        detail("扣费来源", value: available(log.chargeSource))
+                        detail("请求费用", value: KrillFormat.money(log.cost, precision: 6))
+                        detail("套餐扣费", value: log.planCost.map { KrillFormat.money($0, precision: 6) } ?? "—")
+                        detail("余额扣费", value: log.creditCost.map { KrillFormat.money($0, precision: 6) } ?? "—")
+                    }.krillCard()
+                    if !log.errorMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("请求错误", systemImage: "exclamationmark.circle")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(KrillTheme.amber)
+                            Text(log.errorMessage)
+                                .font(.callout)
+                                .foregroundStyle(KrillTheme.text)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }.frame(maxWidth: .infinity, alignment: .leading).krillCard()
+                    }
+                    VStack(spacing: 18) {
                         detail("记录标识", value: log.id)
                     }.krillCard()
                 }.padding(20).frame(maxWidth: 640).frame(maxWidth: .infinity)
@@ -122,6 +157,19 @@ struct DashboardLogDetail: View {
             Text(value).font(.system(.caption, design: .monospaced, weight: .medium))
                 .multilineTextAlignment(.trailing).textSelection(.enabled)
         }
+        .accessibilityElement(children: .combine)
+    }
+    private func available(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "—" : value
+    }
+    private func tokenCount(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0)))
+    }
+    private func duration(_ milliseconds: Double) -> String {
+        if milliseconds < 1000 {
+            return milliseconds.formatted(.number.precision(.fractionLength(0))) + " ms"
+        }
+        return (milliseconds / 1000).formatted(.number.precision(.fractionLength(2))) + " s"
     }
     private func protocolName(_ value: String) -> String {
         ["1": "Anthropic Messages", "2": "Chat Completions", "3": "Responses", "4": "远程压缩", "5": "图像生成", "6": "图像编辑", "7": "视频生成", "9": "搜索", "10": "语音合成", "11": "语音转写", "12": "实时通话", "13": "上下文管理", "14": "后台压缩"][value] ?? (value.isEmpty ? "—" : value)

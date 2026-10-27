@@ -3,47 +3,72 @@ import SwiftUI
 struct LoginView: View {
     @Bindable var store: AppStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var email = ""
     @State private var password = ""
     @State private var code = ""
     @State private var usesCode = false
     @State private var working = false
+    @State private var sendingCode = false
     @State private var sentCode = false
     @State private var secondsUntilResend = 0
     @State private var showPassword = false
+    @State private var website: LoginWebDestination?
     @AppStorage("appearance") private var appearance = "system"
     @FocusState private var focusedField: Field?
+
     private enum Field { case email, password, code }
 
     var body: some View {
-        GeometryReader { proxy in
-            let wide = proxy.size.width >= 700
-            ZStack {
-                KrillBackground()
+        GeometryReader { geometry in
+            let wide = geometry.size.width >= 760 && !dynamicTypeSize.isAccessibilitySize
+            let horizontalPadding: CGFloat = wide ? 40 : 20
+            let verticalPadding: CGFloat = wide ? 28 : 20
+            let availableWidth = min(1040, max(0, geometry.size.width - horizontalPadding * 2))
+            let formWidth = wide ? min(432, availableWidth * 0.54) : min(440, availableWidth)
+            let layout = wide
+                ? AnyLayout(HStackLayout(alignment: .center, spacing: 44))
+                : AnyLayout(VStackLayout(alignment: .center, spacing: 24))
+
+            ScrollViewReader { scroll in
                 ScrollView {
-                    Group {
-                        if wide {
-                            HStack(spacing: 56) {
-                                introduction(wide: true)
-                                    .frame(maxWidth: 450, alignment: .leading)
-                                form.frame(maxWidth: 410)
-                            }
-                            .frame(maxWidth: 960)
-                        } else {
-                            VStack(spacing: 36) {
-                                introduction(wide: false)
-                                form
-                            }
-                            .frame(maxWidth: 450)
+                    layout {
+                        LoginBrandPanel(expanded: wide)
+                            .frame(width: wide ? max(0, availableWidth - formWidth - 44) : formWidth)
+                        VStack(spacing: 18) {
+                            form
+                            footer
                         }
+                        .frame(width: formWidth)
                     }
+                    .frame(maxWidth: 1040)
                     .frame(maxWidth: .infinity)
-                    .frame(minHeight: max(0, proxy.size.height - 64))
-                    .padding(.horizontal, wide ? 44 : 24)
-                    .padding(.vertical, 32)
+                    .frame(minHeight: max(0, geometry.size.height - verticalPadding * 2), alignment: .center)
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.vertical, verticalPadding)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .onChange(of: focusedField) { _, field in
+                    guard let field else { return }
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                        scroll.scrollTo(field, anchor: .center)
+                    }
+                }
+                .onChange(of: geometry.size.height) { _, _ in
+                    guard let field = focusedField else { return }
+                    scroll.scrollTo(field, anchor: .center)
+                }
             }
+            .background(KrillBackground())
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完成") { focusedField = nil }
+            }
+        }
+        .sheet(item: $website) { destination in
+            OfficialWebsiteView(destination: destination)
         }
         .task(id: secondsUntilResend) {
             guard secondsUntilResend > 0 else { return }
@@ -53,75 +78,36 @@ struct LoginView: View {
         }
     }
 
-    private func introduction(wide: Bool) -> some View {
-        VStack(alignment: wide ? .leading : .center, spacing: 20) {
-            Image("KrillLogo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: wide ? 160 : 140)
-                .accessibilityLabel("Krill")
-            .padding(.bottom, wide ? 28 : 12)
-
-            VStack(alignment: wide ? .leading : .center, spacing: 8) {
-                Text("每一次调用，")
-                    .foregroundStyle(KrillTheme.text)
-                Text("都清晰可见。")
-                    .foregroundStyle(KrillTheme.accent)
-            }
-            .font(.system(size: wide ? 46 : 35, weight: .bold, design: .rounded))
-            .minimumScaleFactor(0.8)
-            .accessibilityElement(children: .combine)
-
-            Text("你的 AI 用量，拥有全新视角。")
-                .font(.system(size: 15))
-                .foregroundStyle(KrillTheme.muted)
-
-            if wide {
-                HStack(spacing: 22) {
-                    feature("chart.bar.xaxis", "用量趋势")
-                    feature("square.grid.3x3.fill", "活跃热力")
-                    feature("sparkles", "模型洞察")
-                }
-                .padding(.top, 26)
-            }
-        }
-        .multilineTextAlignment(wide ? .leading : .center)
-    }
-
-    private func feature(_ icon: String, _ title: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Image(systemName: icon).font(.system(size: 21)).foregroundStyle(KrillTheme.cyan)
-            Text(title).font(.system(size: 12)).foregroundStyle(KrillTheme.muted)
-        }
-    }
-
     private var form: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(store.pendingTOTP ? "两步验证" : "欢迎回来")
-                        .font(.system(size: 24, weight: .semibold))
-                    Spacer()
-                    Image(systemName: store.pendingTOTP ? "lock.shield" : "waveform.path")
-                        .foregroundStyle(KrillTheme.cyan)
+        VStack(alignment: .leading, spacing: 18) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top) {
+                    formHeading.fixedSize(horizontal: true, vertical: false)
+                    Spacer(minLength: 12)
+                    appearanceMenu
                 }
-                Text(store.pendingTOTP ? "输入验证器生成的六位动态验证码。" : "使用你的 Krill 账号登录")
-                    .font(.system(size: 13))
-                    .foregroundStyle(KrillTheme.muted)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack { Spacer(); appearanceMenu }
+                    formHeading
+                }
             }
 
-            if !store.pendingTOTP {
+            if store.pendingTOTP {
+                codeField
+            } else {
                 Picker("登录方式", selection: $usesCode) {
                     Text("密码登录").tag(false)
-                    Text("邮箱验证码").tag(true)
+                    Text("验证码登录").tag(true)
                 }
                 .pickerStyle(.segmented)
+                .disabled(working)
                 .onChange(of: usesCode) { _, _ in
                     store.errorMessage = nil
                     code = ""
+                    focusedField = .email
                 }
 
-                labeledField("邮箱", icon: "envelope") {
+                labeledField("邮箱") {
                     TextField("you@example.com", text: $email)
                         .textContentType(.username)
                         .keyboardType(.emailAddress)
@@ -131,31 +117,31 @@ struct LoginView: View {
                         .submitLabel(.next)
                         .onSubmit { focusedField = usesCode ? .code : .password }
                 }
+                .id(Field.email)
 
                 if usesCode {
-                    codeField
-                    HStack(spacing: 8) {
-                        if sentCode {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(KrillTheme.cyan)
-                            Text("验证码已发送，请检查邮箱")
-                                .foregroundStyle(KrillTheme.muted)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .bottom, spacing: 10) {
+                            codeField.frame(minWidth: 140)
+                            sendCodeButton
                         }
-                        Spacer(minLength: 0)
-                        Button(secondsUntilResend > 0 ? "\(secondsUntilResend)s 后重发" : "获取验证码") {
-                            Task { await sendCode() }
+                        VStack(alignment: .trailing, spacing: 10) {
+                            codeField
+                            sendCodeButton
                         }
-                        .foregroundStyle(KrillTheme.cyan)
-                        .disabled(email.trimmingCharacters(in: .whitespaces).isEmpty || working || secondsUntilResend > 0)
                     }
-                    .font(.system(size: 12))
+                    if sentCode {
+                        Text("验证码已发送，请检查邮箱")
+                            .font(.caption).foregroundStyle(KrillTheme.muted)
+                    }
                 } else {
-                    labeledField("密码", icon: "lock") {
-                        HStack {
+                    labeledField("密码") {
+                        HStack(spacing: 10) {
                             Group {
                                 if showPassword {
-                                    TextField("输入密码", text: $password)
+                                    TextField("至少 6 位", text: $password)
                                 } else {
-                                    SecureField("输入密码", text: $password)
+                                    SecureField("至少 6 位", text: $password)
                                 }
                             }
                             .textContentType(.password)
@@ -169,14 +155,13 @@ struct LoginView: View {
                             .accessibilityLabel(showPassword ? "隐藏密码" : "显示密码")
                         }
                     }
+                    .id(Field.password)
                 }
-            } else {
-                codeField
             }
 
             if let message = store.errorMessage, !message.isEmpty {
                 Label(message, systemImage: "exclamationmark.circle")
-                    .font(.system(size: 12))
+                    .font(.caption)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.updatesFrequently)
@@ -185,21 +170,19 @@ struct LoginView: View {
             Button {
                 Task { await signIn() }
             } label: {
-                HStack(spacing: 12) {
-                    if working { ProgressView().tint(Color.white) }
-                    Text(store.pendingTOTP ? "验证并登录" : "进入控制台")
-                    if !working { Image(systemName: "arrow.up.right") }
+                HStack(spacing: 10) {
+                    if working && !sendingCode { ProgressView().tint(.white) }
+                    Text(store.pendingTOTP ? "验证并登录" : "登录")
                 }
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 17)
-                .background(KrillTheme.accent, in: Capsule())
-                .glassEffect(.regular.tint(KrillTheme.accent.opacity(0.2)).interactive(), in: Capsule())
+                .font(.body.weight(.semibold))
+                .foregroundStyle(canSignIn ? Color.white : KrillTheme.muted)
+                .frame(maxWidth: .infinity, minHeight: 54)
+                .background(canSignIn ? KrillTheme.accent : KrillTheme.surfaceMuted, in: Capsule())
+                .glassEffect(.regular.tint(canSignIn ? KrillTheme.accent.opacity(0.18) : .clear).interactive(), in: Capsule())
             }
             .buttonStyle(.plain)
             .disabled(!canSignIn || working)
-            .opacity(canSignIn && !working ? 1 : 0.45)
+            .opacity(working ? 0.7 : 1)
             .accessibilityIdentifier("login.submit")
 
             if store.pendingTOTP {
@@ -207,90 +190,148 @@ struct LoginView: View {
                     store.logout()
                     code = ""
                 }
-                .font(.system(size: 13))
+                .font(.subheadline)
                 .foregroundStyle(KrillTheme.muted)
                 .frame(maxWidth: .infinity)
                 .disabled(working)
+            } else {
+                HStack(spacing: 5) {
+                    Text("还没有账号？").foregroundStyle(KrillTheme.muted)
+                    Button("去注册") { openWebsite("/register") }
+                        .foregroundStyle(KrillTheme.accent)
+                        .fontWeight(.semibold)
+                }
+                .font(.subheadline)
+                .frame(maxWidth: .infinity)
             }
 
-            HStack(spacing: 14) {
-                Rectangle().fill(KrillTheme.text.opacity(0.1)).frame(height: 1)
-                Text("先看一看").font(.system(size: 11)).foregroundStyle(KrillTheme.muted)
-                Rectangle().fill(KrillTheme.text.opacity(0.1)).frame(height: 1)
-            }
+            separator(nil)
 
             Button {
                 focusedField = nil
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) { store.enterDemo() }
             } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "play.circle")
-                    Text("探索演示空间")
-                }
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(KrillTheme.text.opacity(0.8))
-                .frame(maxWidth: .infinity)
+                Label("游客模式查看", systemImage: "person.crop.circle")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(KrillTheme.muted)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 44)
             }
+            .buttonStyle(.plain)
             .disabled(working)
             .accessibilityIdentifier("login.demo")
+        }
+        .padding(2)
+        .krillCard(cornerRadius: 30)
+    }
 
-            HStack(spacing: 5) {
-                Image(systemName: "lock.shield").font(.system(size: 10))
-                Text("安全连接至 krill-code.com")
+    private var footer: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) { policyLinks }
+            VStack(spacing: 12) { policyLinks }
+        }
+        .font(.caption2)
+        .foregroundStyle(KrillTheme.muted)
+        .buttonStyle(.plain)
+    }
+
+    private var formHeading: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(store.pendingTOTP ? "两步验证" : "欢迎回来")
+                .font(.title2.weight(.semibold))
+            Text(store.pendingTOTP ? "输入验证器生成的六位动态验证码。" : "使用你的 Krill 账号登录")
+                .font(.caption)
+                .foregroundStyle(KrillTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var appearanceMenu: some View {
+        Menu {
+            Picker("外观", selection: $appearance) {
+                Text("跟随系统").tag("system")
+                Text("白色").tag("light")
+                Text("黑夜").tag("dark")
             }
-            .font(.system(size: 10))
-            .foregroundStyle(KrillTheme.muted.opacity(0.8))
-            .frame(maxWidth: .infinity)
+        } label: {
+            Label("外观", systemImage: "circle.lefthalf.filled")
+                .font(.caption)
+                .foregroundStyle(KrillTheme.muted)
+                .padding(.horizontal, 8)
+                .frame(minHeight: 44)
+                .contentShape(.rect)
+        }
+        .accessibilityIdentifier("login.appearance")
+    }
 
-            HStack {
-                Spacer()
-                Menu {
-                    Picker("外观", selection: $appearance) {
-                        Text("跟随系统").tag("system")
-                        Text("白色").tag("light")
-                        Text("黑夜").tag("dark")
-                    }
-                } label: {
-                    Label("外观", systemImage: "circle.lefthalf.filled")
-                        .font(.system(size: 12))
-                        .foregroundStyle(KrillTheme.muted)
-                }
-                Spacer()
+    @ViewBuilder private var policyLinks: some View {
+        Button("隐私政策") { openWebsite("/privacy-policy") }
+        Button("用户协议") { openWebsite("/terms-of-service") }
+        Button("支持的国家和地区") { openWebsite("/supported-regions") }
+    }
+
+    private func separator(_ title: String?) -> some View {
+        HStack(spacing: 12) {
+            Rectangle().fill(KrillTheme.grid).frame(height: 1)
+            if let title {
+                Text(title).font(.caption).foregroundStyle(KrillTheme.muted).fixedSize()
+                Rectangle().fill(KrillTheme.grid).frame(height: 1)
             }
         }
-        .padding(26)
-        .krillCard(cornerRadius: 32)
     }
 
     private var codeField: some View {
-        labeledField("验证码", icon: "number") {
+        labeledField("验证码") {
             TextField("六位验证码", text: $code)
                 .textContentType(.oneTimeCode)
                 .keyboardType(.numberPad)
                 .focused($focusedField, equals: .code)
-                .onChange(of: code) { _, newValue in
-                    code = String(newValue.filter(\.isNumber).prefix(6))
-                }
+                .onChange(of: code) { _, newValue in code = String(newValue.filter(\.isNumber).prefix(6)) }
+        }
+        .id(Field.code)
+    }
+
+    private var sendCodeButton: some View {
+        Button {
+            Task { await sendCode() }
+        } label: {
+            Group {
+                if sendingCode { ProgressView().controlSize(.small) }
+                else { Text(secondsUntilResend > 0 ? "\(secondsUntilResend)s 后重发" : "发送验证码") }
+            }
+            .font(.caption.weight(.medium))
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 52)
+            .background(KrillTheme.surfaceMuted.opacity(0.55), in: .rect(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(KrillTheme.border, lineWidth: 0.7))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(KrillTheme.text)
+        .disabled(!validEmail || working || secondsUntilResend > 0)
+    }
+
+    private func labeledField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title).font(.subheadline.weight(.medium)).foregroundStyle(KrillTheme.text)
+            content()
+                .font(.body)
+                .padding(.horizontal, 15)
+                .frame(minHeight: 52)
+                .background(KrillTheme.surface.opacity(0.78), in: .rect(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(KrillTheme.border, lineWidth: 0.8))
+                .disabled(working)
         }
     }
 
-    private func labeledField<Content: View>(_ title: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(KrillTheme.muted)
-            HStack(spacing: 12) {
-                Image(systemName: icon).frame(width: 18).foregroundStyle(KrillTheme.muted)
-                content().font(.system(size: 15))
-            }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 54)
-            .background(KrillTheme.text.opacity(0.045), in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(KrillTheme.text.opacity(0.08)))
-        }
+    private var validEmail: Bool {
+        email.trimmingCharacters(in: .whitespacesAndNewlines)
+            .range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) != nil
     }
 
     private var canSignIn: Bool {
         if store.pendingTOTP { return code.count == 6 }
-        return !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (usesCode ? code.count == 6 : !password.isEmpty)
+        return validEmail && (usesCode ? code.count == 6 : password.count >= 6)
     }
 
     @MainActor private func signIn() async {
@@ -310,13 +351,21 @@ struct LoginView: View {
     }
 
     @MainActor private func sendCode() async {
-        guard !working else { return }
+        guard validEmail, !working, secondsUntilResend == 0 else { return }
         working = true
-        await store.sendLoginCode(email: email.trimmingCharacters(in: .whitespacesAndNewlines))
+        sendingCode = true
+        let cooldown = await store.sendLoginCode(email: email.trimmingCharacters(in: .whitespacesAndNewlines))
         working = false
-        if store.errorMessage == nil {
+        sendingCode = false
+        if let cooldown {
             sentCode = true
-            secondsUntilResend = 60
+            secondsUntilResend = max(1, cooldown)
         }
+    }
+
+    private func openWebsite(_ path: String) {
+        guard let url = URL(string: "https://www.krill-code.com" + path) else { return }
+        focusedField = nil
+        website = LoginWebDestination(url: url)
     }
 }

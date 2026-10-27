@@ -7,7 +7,7 @@ enum DemoData {
         let today = calendar.startOfDay(for: now)
         let names = ["claude-sonnet-4.5", "gpt-5", "gemini-2.5-pro"]
         var all: [RequestLog] = []
-        for day in -29...0 {
+        for day in -30...0 {
             let start = calendar.date(byAdding: .day, value: day, to: today)!
             for hour in 0..<24 {
                 let volume = hour >= 9 && hour <= 22 ? 9 : 2
@@ -22,13 +22,23 @@ enum DemoData {
                     guard filter.method.isEmpty || filter.method == "3" else { continue }
                     let usePlan = seed % 6 != 0
                     guard filter.chargeType.isEmpty || filter.chargeType == (usePlan ? "plan" : "balance") else { continue }
+                    let status = seed % 37 == 0 ? 500 : 200
+                    if let selected = filter.status {
+                        if selected == 1 && status != 200 { continue }
+                        if selected == 0 && status == 200 { continue }
+                        if selected > 1 && selected != status { continue }
+                    }
+                    let cost = Double(seed % 27 + 6) / 100
                     all.append(RequestLog(id: "demo-\(day)-\(hour)-\(index)", model: model, date: date,
-                        cost: Double(seed % 27 + 6) / 100,
+                        cost: cost,
                         inputTokens: Double(1800 + seed % 2100), outputTokens: Double(220 + seed % 450),
                         cacheReadTokens: Double(95000 + seed % 89000), cacheWriteTokens: Double(seed % 5 == 0 ? 1200 : 0),
                         reasoningTokens: Double(seed % 500), durationMS: Double(750 + seed % 3600),
-                        status: seed % 37 == 0 ? "500" : "200", method: "Responses",
-                        tokenName: tokenID == 1 ? "工作空间" : "个人项目"))
+                        status: String(status), method: "Responses",
+                        tokenName: tokenID == 1 ? "工作空间" : "个人项目",
+                        channel: "演示渠道", endpoint: "demo.krill.local", firstTokenMS: Double(250 + seed % 750),
+                        planCost: usePlan ? cost : 0, creditCost: usePlan ? 0 : cost, reasoningEffort: "High",
+                        errorMessage: status == 500 ? "演示请求异常" : "", chargeSource: usePlan ? "演示订阅" : "余额"))
                 }
             }
         }
@@ -38,9 +48,12 @@ enum DemoData {
         let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: now))!
         let month = all.filter { $0.date >= monthStart }
         let grouped = Dictionary(grouping: selected) { row in
-            filter.period == .today ? calendar.dateInterval(of: .hour, for: row.date)!.start : calendar.startOfDay(for: row.date)
+            filter.period == .day ? calendar.dateInterval(of: .hour, for: row.date)!.start : calendar.startOfDay(for: row.date)
         }
-        let trend = grouped.map { date, rows in TrendPoint(date: date, cost: rows.reduce(0) { $0 + $1.cost }, requests: rows.count) }.sorted { $0.date < $1.date }
+        let trend: [TrendPoint] = grouped.map { date, rows in
+            let stats = summarize(rows)
+            return TrendPoint(date: date, cost: stats.cost, requests: rows.count, totalTokens: stats.totalTokens)
+        }.sorted { $0.date < $1.date }
         let modelGroups: [String: [RequestLog]] = Dictionary(grouping: selected, by: \.model)
         let models: [ModelUsage] = modelGroups.map { name, rows in
             let stats = summarize(rows)
@@ -57,12 +70,14 @@ enum DemoData {
         let todayCost = todays.reduce(0) { $0 + $1.cost }
         let yesterday = today.addingTimeInterval(-86400)
         let priorCost = all.filter { $0.date >= yesterday && $0.date <= yesterday.addingTimeInterval(now.timeIntervalSince(today)) }.reduce(0) { $0 + $1.cost }
+        let planCost = selected.reduce(0) { $0 + ($1.planCost ?? 0) }
+        let creditCost = selected.reduce(0) { $0 + ($1.creditCost ?? 0) }
         return DashboardSnapshot(stats: summarize(selected), today: summarize(todays), month: summarize(month),
             yesterdayChange: priorCost > 0 ? (todayCost - priorCost) / priorCost : nil,
             heatmap: heatmap, trend: trend, models: models,
-            quotas: [QuotaUsage(id: "demo-pro", name: "Pro 月度订阅", used: todayCost, limit: 120,
-                resetAt: today.addingTimeInterval(86400), kind: "每日额度")],
-            quotaSummary: QuotaSummary(sameDay: todayCost * 0.72, carryover: todayCost * 0.18, credit: todayCost * 0.1, plan: todayCost * 0.9),
+            quotas: [QuotaUsage(id: "demo-pro", name: "Pro 月度订阅", used: planCost, limit: 1200,
+                resetAt: nil, kind: "订阅额度")],
+            quotaSummary: QuotaSummary(sameDay: planCost * 0.8, carryover: planCost * 0.2, credit: creditCost, plan: planCost),
             logs: Array(selected.sorted { $0.date > $1.date }.prefix(30)), updatedAt: now, heatmapComplete: true)
     }
     static func summarize(_ rows: [RequestLog]) -> UsageStats {
@@ -73,6 +88,8 @@ enum DemoData {
         return UsageStats(requests: rows.count, inputTokens: input, outputTokens: output,
             cacheReadTokens: read, cacheWriteTokens: write, reasoningTokens: rows.reduce(0) { $0 + $1.reasoningTokens },
             totalTokens: input + output + read + write, cost: rows.reduce(0) { $0 + $1.cost },
-            cacheHitRate: input + read + write > 0 ? read / (input + read + write) : 0)
+            cacheHitRate: input + read + write > 0 ? read / (input + read + write) : 0,
+            successfulRequests: rows.filter(\.isSuccess).count, failedRequests: rows.filter { !$0.isSuccess }.count,
+            statusCountsAvailable: true)
     }
 }

@@ -30,7 +30,7 @@ struct DashboardView: View {
                     .toolbarBackground(.hidden, for: .navigationBar)
                 }
             }
-            Tab("请求", systemImage: "waveform.path", value: .logs) {
+            Tab("请求", systemImage: "text.alignleft", value: .logs) {
                 NavigationStack {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 20) {
@@ -72,13 +72,20 @@ struct DashboardView: View {
             if store.isDemo {
                 Text("演示").font(.system(size: 10, weight: .semibold)).foregroundStyle(KrillTheme.amber)
             }
-            Button { showingFilters = true } label: { Image(systemName: "line.3.horizontal.decrease") }
+            Button { showingFilters = true } label: {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .frame(width: 24, height: 24)
+                    .frame(width: 44, height: 44)
+            }
                 .accessibilityLabel("筛选用量")
             Button { Task { await store.refresh() } } label: {
-                if store.isLoading { ProgressView().controlSize(.small) }
-                else { Image(systemName: "arrow.clockwise") }
+                RefreshControlLabel(isRefreshing: store.isLoading)
+                    .frame(width: 44, height: 44)
             }
-            .disabled(store.isLoading).accessibilityLabel("刷新用量")
+            .disabled(store.isLoading)
+            .accessibilityLabel(store.isLoading ? "正在刷新" : "刷新用量")
+            .accessibilityIdentifier("dashboard.refresh")
+            .transaction { $0.animation = nil }
         }
     }
 
@@ -103,25 +110,29 @@ struct DashboardView: View {
             if let message = store.errorMessage { errorCard(message) }
             ForEach(store.warnings, id: \.self) { warning in errorCard(warning) }
             if let snapshot = store.snapshot {
+                SectionEyebrow(title: "最近 \(store.filter.period.label)", trailing: "截至当前")
+                PeriodStatisticsPanel(snapshot: snapshot, quotaAvailable: store.quotaSummaryAvailable)
                 if wide {
                     HStack(alignment: .top, spacing: 20) {
                         VStack(spacing: 20) {
                             TodayCard(snapshot: snapshot, selectedHour: $selectedHour)
                             SpendTrendCard(points: snapshot.trend, period: store.filter.period.label, total: snapshot.stats.cost)
-                            QuotaCard(quotas: snapshot.quotas, summary: snapshot.quotaSummary)
+                            if store.quotasAvailable {
+                                QuotaCard(quotas: snapshot.quotas)
+                            }
                         }.frame(maxWidth: .infinity)
                         VStack(spacing: 20) {
-                            periodMetrics(snapshot)
                             ModelUsageCard(models: snapshot.models)
                             requestPanel(limit: 6)
                         }.frame(maxWidth: .infinity)
                     }
                 } else {
                     TodayCard(snapshot: snapshot, selectedHour: $selectedHour)
-                    periodMetrics(snapshot)
                     SpendTrendCard(points: snapshot.trend, period: store.filter.period.label, total: snapshot.stats.cost)
                     ModelUsageCard(models: snapshot.models)
-                    QuotaCard(quotas: snapshot.quotas, summary: snapshot.quotaSummary)
+                    if store.quotasAvailable {
+                        QuotaCard(quotas: snapshot.quotas)
+                    }
                     requestPanel(limit: 4)
                 }
                 HStack(spacing: 5) {
@@ -131,7 +142,9 @@ struct DashboardView: View {
                 }.font(.system(size: 10)).foregroundStyle(KrillTheme.muted).frame(maxWidth: .infinity)
             } else if store.isLoading {
                 VStack(spacing: 14) {
-                    ProgressView().tint(KrillTheme.accent)
+                    ProgressView().progressViewStyle(.circular)
+                        .frame(width: 24, height: 24)
+                        .tint(KrillTheme.accent)
                     Text("正在获取用量").font(.caption).foregroundStyle(KrillTheme.muted)
                 }.frame(maxWidth: .infinity, minHeight: 300)
             } else {
@@ -153,20 +166,8 @@ struct DashboardView: View {
         }.padding(.vertical, 8)
     }
 
-    private func periodMetrics(_ snapshot: DashboardSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 15) {
-            SectionEyebrow(title: "\(store.filter.period.label)统计")
-            LazyVGrid(columns: [.init(.flexible()), .init(.flexible())], spacing: 10) {
-                MetricTile(title: "总请求", value: snapshot.stats.requests.formatted(), symbol: "arrow.up.arrow.down")
-                MetricTile(title: "总 Tokens", value: KrillFormat.number(snapshot.stats.totalTokens), symbol: "sparkles", tint: KrillTheme.violet)
-                MetricTile(title: "缓存命中", value: KrillFormat.percent(snapshot.stats.cacheHitRate), symbol: "bolt.fill", tint: KrillTheme.green)
-                MetricTile(title: "思考 Tokens", value: KrillFormat.number(snapshot.stats.reasoningTokens), symbol: "brain", tint: KrillTheme.amber)
-            }
-        }
-    }
-
     private var filterCount: Int {
-        (store.filter.model.isEmpty ? 0 : 1) + (store.filter.tokenID == nil ? 0 : 1) + (store.filter.chargeType.isEmpty ? 0 : 1) + (store.filter.method.isEmpty ? 0 : 1)
+        (store.filter.model.isEmpty ? 0 : 1) + (store.filter.tokenID == nil ? 0 : 1) + (store.filter.chargeType.isEmpty ? 0 : 1) + (store.filter.method.isEmpty ? 0 : 1) + (store.filter.status == nil ? 0 : 1)
     }
 
     private func errorCard(_ message: String) -> some View {
@@ -221,8 +222,10 @@ struct DashboardView: View {
                 VStack(spacing: 18) {
                     KrillMark(size: 64)
                     Text(store.userDisplayName).font(.title3.weight(.semibold))
-                    Label(store.isDemo ? "演示模式" : "已安全连接", systemImage: store.isDemo ? "play.circle" : "checkmark.shield.fill")
-                        .font(.caption).foregroundStyle(store.isDemo ? KrillTheme.amber : KrillTheme.green)
+                    if store.isDemo {
+                        Label("演示模式", systemImage: "play.circle")
+                            .font(.caption).foregroundStyle(KrillTheme.amber)
+                    }
                 }.frame(maxWidth: .infinity).padding(.vertical, 10).krillCard()
                 VStack(alignment: .leading, spacing: 20) {
                     accountLine("服务地址", value: "www.krill-code.com", symbol: "network")
@@ -235,6 +238,21 @@ struct DashboardView: View {
                             Image(systemName: "arrow.up.right").font(.caption)
                         }.font(.subheadline)
                     }
+                    Link(destination: URL(string: "https://github.com/AliYa-chen/KrillAPP")!) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                                .frame(width: 20)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("GitHub 仓库").font(.subheadline)
+                                Text("AliYa-chen/KrillAPP")
+                                    .font(.caption)
+                                    .foregroundStyle(KrillTheme.muted)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.up.right").font(.caption)
+                        }
+                    }
+                    .accessibilityLabel("GitHub 仓库，AliYa-chen/KrillAPP")
                 }.krillCard()
                 VStack(alignment: .leading, spacing: 16) {
                     SectionEyebrow(title: "外观")
@@ -278,7 +296,7 @@ struct DashboardLogRow: View {
                 HStack(spacing: 5) {
                     Text(KrillFormat.date(log.date, pattern: "MM/dd HH:mm:ss"))
                     Text("·")
-                    Text(log.isSuccess ? "成功" : log.status)
+                    Text(log.isSuccess ? "成功" : log.status == "102" ? "连接中" : log.status)
                 }.font(.caption2).foregroundStyle(KrillTheme.muted).lineLimit(1)
             }
             Spacer(minLength: 4)

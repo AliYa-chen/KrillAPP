@@ -206,68 +206,132 @@ struct SpendTrendCard: View {
 
 struct ModelUsageCard: View {
     let models: [ModelUsage]
-    private var sorted: [ModelUsage] { models.sorted { $0.cost > $1.cost } }
-    private var shown: [ModelUsage] { Array(sorted.prefix(5)) }
-    private var total: Double { models.reduce(0) { $0 + $1.cost } }
+    @State private var metric: ModelMetric = .requests
+    @State private var expanded = false
+
+    private enum ModelMetric: String, CaseIterable, Identifiable {
+        case requests = "请求数", tokens = "Tokens", cost = "费用"
+        var id: String { rawValue }
+        var tint: Color {
+            switch self {
+            case .requests: KrillTheme.cyan
+            case .tokens: KrillTheme.violet
+            case .cost: KrillTheme.green
+            }
+        }
+        func value(_ model: ModelUsage) -> Double {
+            switch self {
+            case .requests: Double(model.requests)
+            case .tokens: model.tokens
+            case .cost: model.cost
+            }
+        }
+        func label(_ model: ModelUsage) -> String {
+            switch self {
+            case .requests: KrillFormat.number(Double(model.requests)) + " 次"
+            case .tokens: KrillFormat.number(model.tokens)
+            case .cost: KrillFormat.money(model.cost)
+            }
+        }
+    }
+
+    private var sorted: [ModelUsage] {
+        models.sorted {
+            let first = metric.value($0), second = metric.value($1)
+            return first == second ? $0.name < $1.name : first > second
+        }
+    }
+    private var shown: [ModelUsage] { expanded ? sorted : Array(sorted.prefix(6)) }
+    private var maximum: Double { max(0, sorted.map { metric.value($0) }.max() ?? 0) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            SectionEyebrow(title: "模型分布", trailing: "按消耗")
+            SectionEyebrow(title: "模型使用分布", trailing: "\(models.count) 个模型")
             if models.isEmpty {
-                Text("所选时间内暂无模型用量").font(.caption).foregroundStyle(KrillTheme.muted).frame(maxWidth: .infinity, minHeight: 100)
+                Text("所选时间内暂无模型用量")
+                    .font(.caption).foregroundStyle(KrillTheme.muted)
+                    .frame(maxWidth: .infinity, minHeight: 100)
             } else {
-                HStack(spacing: 22) {
-                    Chart(Array(sorted.enumerated()), id: \.element.id) { index, model in
-                        SectorMark(angle: .value("费用", max(0, model.cost)), innerRadius: .ratio(0.78), angularInset: 3)
-                            .cornerRadius(3).foregroundStyle(KrillTheme.palette[index % KrillTheme.palette.count])
-                    }
-                    .chartLegend(.hidden).frame(width: 104, height: 104)
-                    .chartBackground { _ in
-                        VStack(spacing: 4) {
-                            Text("\(models.count)").font(.system(size: 27, weight: .semibold, design: .rounded))
-                            Text("个模型").font(.system(size: 10)).foregroundStyle(KrillTheme.muted)
-                        }
-                    }
-                    VStack(alignment: .leading, spacing: 13) {
-                        ForEach(Array(shown.enumerated()), id: \.element.id) { index, model in
-                            HStack(spacing: 6) {
-                                Circle().fill(KrillTheme.palette[index % KrillTheme.palette.count]).frame(width: 5, height: 5)
-                                Text(model.name).lineLimit(1).truncationMode(.middle)
-                                Spacer(minLength: 2)
-                                Text(KrillFormat.percent(total > 0 ? model.cost / total : 0)).foregroundStyle(KrillTheme.muted).monospacedDigit()
-                            }.font(.system(size: 10, weight: .medium))
-                        }
+                Picker("模型排序依据", selection: $metric) {
+                    ForEach(ModelMetric.allCases) { value in Text(value.rawValue).tag(value) }
+                }.pickerStyle(.segmented)
+
+                VStack(spacing: 18) {
+                    ForEach(Array(shown.enumerated()), id: \.element.id) { index, model in
+                        rankingRow(model, rank: index + 1)
                     }
                 }
-                VStack(spacing: 13) {
-                    ForEach(Array(shown.prefix(3).enumerated()), id: \.element.id) { index, model in
-                        HStack {
-                            Text(String(format: "%02d", index + 1)).font(.system(size: 11, design: .monospaced)).foregroundStyle(KrillTheme.muted)
-                            Text(model.name).font(.caption.weight(.medium)).lineLimit(1)
-                            Spacer()
-                            Text(KrillFormat.money(model.cost)).font(.system(.caption, design: .rounded, weight: .semibold)).monospacedDigit()
+                if models.count > 6 {
+                    Button {
+                        expanded.toggle()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(expanded ? "收起" : "查看全部 \(models.count) 个模型")
+                            Image(systemName: expanded ? "chevron.up" : "chevron.down")
                         }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(KrillTheme.accent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }.krillCard()
+    }
+
+    private func rankingRow(_ model: ModelUsage, rank: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(String(format: "%02d", rank))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(KrillTheme.muted)
+                Text(model.name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(KrillTheme.text)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+                Spacer(minLength: 4)
+                Text(metric.label(model))
+                    .font(.system(.caption, design: .rounded, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(KrillTheme.text)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            GeometryReader { geometry in
+                let fraction = maximum > 0 ? min(1, max(0, metric.value(model) / maximum)) : 0
+                ZStack(alignment: .leading) {
+                    Capsule().fill(KrillTheme.surfaceMuted)
+                    Capsule().fill(metric.tint.opacity(0.72))
+                        .frame(width: geometry.size.width * fraction)
+                }
+            }
+            .frame(height: 6)
+            .accessibilityHidden(true)
+            Text("\(model.requests.formatted()) 次 · \(KrillFormat.number(model.tokens)) Tokens · \(KrillFormat.money(model.cost))")
+                .font(.caption2)
+                .foregroundStyle(KrillTheme.muted)
+                .monospacedDigit()
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
 struct QuotaCard: View {
     let quotas: [QuotaUsage]
-    let summary: QuotaSummary
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            SectionEyebrow(title: "订阅额度", trailing: "USD")
+            SectionEyebrow(title: "套餐使用情况", trailing: "USD")
             if quotas.isEmpty {
-                Text("暂无可用订阅额度").font(.caption).foregroundStyle(KrillTheme.muted)
+                Text("所选时间内暂无套餐用量").font(.caption).foregroundStyle(KrillTheme.muted)
             }
             ForEach(quotas) { quota in
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text(quota.name).font(.caption.weight(.medium)).lineLimit(1)
                         Spacer()
-                        Text("\(KrillFormat.money(quota.used)) / \(KrillFormat.money(quota.limit))")
+                        Text("已用 \(KrillFormat.money(quota.used)) / \(KrillFormat.money(quota.limit))")
                             .font(.system(size: 10, design: .rounded)).monospacedDigit().foregroundStyle(KrillTheme.muted)
                     }
                     ProgressView(value: min(max(quota.used, 0), max(quota.limit, 0)), total: max(quota.limit, 0.000001))
@@ -277,25 +341,6 @@ struct QuotaCard: View {
                     }
                 }
             }
-            Rectangle().fill(KrillTheme.grid).frame(height: 1)
-            HStack {
-                Text("当前范围订阅扣费").font(.system(size: 11)).foregroundStyle(KrillTheme.muted)
-                Spacer()
-                Text(KrillFormat.money(summary.plan)).font(.system(size: 14, weight: .medium, design: .rounded)).monospacedDigit()
-            }
-            HStack {
-                charge("当日额度", summary.sameDay)
-                Spacer()
-                charge("结转额度", summary.carryover)
-                Spacer()
-                charge("余额扣费", summary.credit)
-            }
         }.krillCard()
-    }
-    private func charge(_ title: String, _ value: Double) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(title).font(.system(size: 10)).foregroundStyle(KrillTheme.muted)
-            Text(KrillFormat.money(value)).font(.system(size: 14, weight: .medium, design: .rounded)).monospacedDigit()
-        }
     }
 }

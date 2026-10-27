@@ -17,6 +17,8 @@ final class AppStore {
     var hasMoreLogs = false
     var availableModels: [String] = []
     var availableTokens: [TokenOption] = []
+    var quotaSummaryAvailable = false
+    var quotasAvailable = false
     private let api = APIClient()
     private var token: String?
     private var pendingToken: String?
@@ -50,10 +52,12 @@ final class AppStore {
     func loginWithCode(email: String, code: String) async {
         await authenticate(path: "api/auth/login/verify", body: ["email": .string(email.trimmingCharacters(in: .whitespacesAndNewlines)), "verification_code": .string(code)])
     }
-    func sendLoginCode(email: String) async {
+    func sendLoginCode(email: String) async -> Int? {
         errorMessage = nil
-        do { _ = try await api.request("api/auth/login/send-code", body: ["email": .string(email.trimmingCharacters(in: .whitespacesAndNewlines))]) }
-        catch { errorMessage = error.localizedDescription }
+        do {
+            let response = try await api.request("api/auth/login/send-code", body: ["email": .string(email.trimmingCharacters(in: .whitespacesAndNewlines))])
+            return min(3600, max(1, response["resend_after_seconds"].numericValue == nil ? 60 : response["resend_after_seconds"].int))
+        } catch { errorMessage = error.localizedDescription; return nil }
     }
     func verifyTOTP(code: String) async {
         guard let pendingToken else { return }
@@ -100,6 +104,8 @@ final class AppStore {
         availableModels = ["claude-sonnet-4.5", "gpt-5", "gemini-2.5-pro"]
         availableTokens = [TokenOption(id: 1, name: "工作空间"), TokenOption(id: 2, name: "个人项目")]
         hasMoreLogs = false
+        quotaSummaryAvailable = true
+        quotasAvailable = true
         snapshot = DemoData.snapshot(filter: filter)
         loadedFilter = filter
     }
@@ -120,6 +126,8 @@ final class AppStore {
         availableModels = []
         availableTokens = []
         hasMoreLogs = false
+        quotaSummaryAvailable = false
+        quotasAvailable = false
         errorMessage = nil
         warnings = []
         filter = UsageFilter()
@@ -134,6 +142,8 @@ final class AppStore {
         if loadedFilter != selectedFilter {
             snapshot = nil
             hasMoreLogs = false
+            quotaSummaryAvailable = false
+            quotasAvailable = false
         }
         let now = Date()
         let selectedRange = KrillDate.range(for: selectedFilter.period, now: now)
@@ -164,6 +174,8 @@ final class AppStore {
             snapshot = DashboardSnapshot(stats: mainStats, today: todayStats, month: monthStats,
                 yesterdayChange: nil, heatmap: [], trend: ResponseParser.trend(main), models: [], quotas: [],
                 quotaSummary: QuotaSummary(), logs: parsedLogs, updatedAt: now, heatmapComplete: false)
+            quotaSummaryAvailable = false
+            quotasAvailable = false
 
             async let previous = optional("api/request-logs/stats", token: token, body: Self.query(filter: selectedFilter, start: yesterday, end: yesterdayEnd))
             async let models = optional("api/request-logs/model-stats", token: token, body: query)
@@ -178,9 +190,17 @@ final class AppStore {
             }
             if let raw = supplements.1 { snapshot?.models = ResponseParser.models(raw) }
             else { warnings.append("模型分布暂时不可用") }
-            if let raw = supplements.2 { snapshot?.quotas = ResponseParser.quotas(raw) }
+            if let raw = supplements.2, raw["items"].isArray {
+                snapshot?.quotas = ResponseParser.quotas(raw)
+                quotasAvailable = true
+            }
             else { warnings.append("订阅额度暂时不可用") }
-            if let raw = supplements.3 { snapshot?.quotaSummary = ResponseParser.quotaSummary(raw) }
+            if let raw = supplements.3,
+               raw["total_plan_cost_usd"].numericValue != nil,
+               raw["total_credit_cost_usd"].numericValue != nil {
+                snapshot?.quotaSummary = ResponseParser.quotaSummary(raw)
+                quotaSummaryAvailable = true
+            }
             else { warnings.append("扣费明细暂时不可用") }
             availableModels = supplements.4.0
             availableTokens = supplements.4.1
@@ -258,6 +278,7 @@ final class AppStore {
         if let id = filter.tokenID { query["token_id"] = .number(Double(id)) }
         if !filter.chargeType.isEmpty { query["charge_type"] = .string(filter.chargeType) }
         if let method = Int(filter.method) { query["method"] = .number(Double(method)) }
+        if let status = filter.status { query["status"] = .number(Double(status)) }
         return query
     }
     nonisolated private static func pageQuery(_ query: [String: JSONValue], page: Int) -> [String: JSONValue] {
